@@ -152,6 +152,7 @@ def make_handler(config: Config, store: Store) -> type[BaseHTTPRequestHandler]:
             try:
                 payload = decode_form_payload(body)
                 store.log_request(path, payload)
+                print(f"request path={path} mid={payload.get('mid')} keys={','.join(sorted(payload))}")
                 answer = response_for(payload, config)
                 self.send_json(HTTPStatus.OK, answer)
             except ValueError as error:

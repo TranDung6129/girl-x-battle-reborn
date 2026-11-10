@@ -15,6 +15,12 @@ curl http://127.0.0.1:18080/healthz
 
 This is a protocol scaffold, not yet a playable offline server. After the APK connects, inspect the `request_log` SQLite table to implement the next `mid` values with the response shapes required by the client.
 
+To print the recorded requests with `sid`, `token`, and `login_token` redacted:
+
+```sh
+python3 show_requests.py offline-state.sqlite3
+```
+
 ## Patching the APK
 
 On a development machine, create an unsigned copy that targets the local bootstrap endpoint:
