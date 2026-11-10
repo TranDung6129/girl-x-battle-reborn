@@ -19,6 +19,8 @@ LOADING_ENTRY = "assets/src_64/app/scenes/LoadingScene.lua"
 ORIGINAL_URL = b"http://119.81.215.217:9000/center/v1"
 SDK_LOGIN_CALL = b"\x17showLoginSdkWindow"
 OFFLINE_LOGIN_CALL = b"\x15showLoginWindow_"
+SDK_SELECT_SERVER = b"xydSelectServer"
+OFFLINE_SELECT_SERVER = b"xydOfflineNoOp_"
 
 
 def equal_length_url(url: str, byte_length: int) -> bytes:
@@ -48,13 +50,18 @@ def bypass_android_sdk_login(chunk: bytes) -> bytes:
     size_offset = call_offset - 172
     if chunk[size_offset : size_offset + 2] != b"\xa8\x02":
         raise ValueError("unexpected LuaJIT prototype size before SDK-login call")
-    return (
+    patched = (
         chunk[:size_offset]
         + b"\xa6\x02"
         + chunk[size_offset + 2 : call_offset]
         + OFFLINE_LOGIN_CALL
         + chunk[call_offset + len(SDK_LOGIN_CALL) :]
     )
+    if patched.count(SDK_SELECT_SERVER) != 1:
+        raise ValueError("unexpected Android SDK select-server call count")
+    if len(SDK_SELECT_SERVER) != len(OFFLINE_SELECT_SERVER):
+        raise AssertionError("select-server replacement must preserve bytecode size")
+    return patched.replace(SDK_SELECT_SERVER, OFFLINE_SELECT_SERVER)
 
 
 def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
