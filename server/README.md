@@ -32,3 +32,23 @@ python3 tools/patch_bootstrap_url.py original.apk patched-unsigned.apk
 The script changes the primary bootstrap URL in `UpdateScene_64.lua`, bypasses the unavailable Android vendor SDK in `LoadingScene.lua` (including its select-server callback), and removes the old `META-INF` signatures. The bootstrap replacement preserves LuaJIT bytecode length with ignored URL-query padding; the SDK bypass uses a guarded version-specific bytecode patch. The resulting APK must be zipaligned and signed with a key you control before installation. Use only a local companion server and an APK you are permitted to modify.
 
 For convenience, the `Build offline MVP APK` GitHub Actions workflow performs those steps and uploads a signed test APK as an artifact. It uses a newly generated test key on every run; the APK cannot be installed over the original signed game and must not be used for production distribution.
+
+## Restoring visual resources
+
+The base 1.631.0 APK contains the Lua client but not the game's downloadable
+images, Cocos UI files, skeletons, and sounds. The client looks for those files
+under its Android writable directory, specifically
+`Android/data/com.carolgames.gxb/files/res/web`.
+
+A community-preserved archive matching 1.631.0 is available from the
+[Girls X Battle Asset Archive](https://archive.org/details/girls-x-battle-asset-unified-merge).
+Download `gxb1_lazy_unified_assets_verified_1.631.0_25420.tar.zst`, then, with
+one Android device connected by ADB, run:
+
+```sh
+chmod +x tools/install_archived_assets_adb.sh
+tools/install_archived_assets_adb.sh ~/Downloads/gxb1_lazy_unified_assets_verified_1.631.0_25420.tar.zst
+```
+
+The installer verifies SHA-256 before extracting or copying anything and only
+writes the app's own `files/res` directory. It does not replace the APK.

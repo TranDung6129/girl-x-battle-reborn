@@ -28,6 +28,7 @@ MID_LOAD_USER_REGIONS = 18
 MID_QUERY_SERVER_TIME = 3
 MID_GET_BUILDING_LIST = 1056
 MID_GET_PLAYER_GROUP_BY_KEY = 2864
+MID_LOAD_SUMMON_INFO = 56
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,23 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
         # rather than as an object.  A deterministic group prevents startup
         # code from treating an unexpected object as a feature flag.
         return "A"
+
+    if mid == MID_LOAD_SUMMON_INFO:
+        # SummonWindow indexes these lists immediately to populate its five
+        # featured-character slots.  Use existing 1.631.0 hero table IDs so
+        # the restored client resources can resolve their portraits and names.
+        return {
+            "mana_free_time": 0,
+            "crystal_free_time": 0,
+            "mana_free_num": 1,
+            "main_ids": [10001001, 10001002],
+            "second_ids": [10001003, 10001004, 10001006],
+            "mana_id": 10001001,
+            "pet_id": 10001002,
+            "partner_id": 10001003,
+            "directional_show_id": 10001004,
+            "server_time": now,
+        }
 
     # Returning HTTP 200 lets the client log and expose the next missing
     # response shape without the generic connection-retry dialog.
