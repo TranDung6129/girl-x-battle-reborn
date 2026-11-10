@@ -67,6 +67,62 @@ class Store:
             )
 
 
+def offline_player_info(now: int) -> dict[str, Any]:
+    """Smallest player record that SelfPlayer.onPlayerInfo_ can initialise."""
+    return {
+        "player_id": 1,
+        "uid": 1,
+        "player_name": "Offline Player",
+        "lev": 1,
+        "exp": 1,
+        "region": 1,
+        "region_name": "Offline",
+        "mana": 100000,
+        "crystal": 100000,
+        "energy": 100,
+        "max_energy": 100,
+        "energy_time": now,
+        "spirit_energy": 0,
+        "spirit_energy_time": now,
+        "invitation": 0,
+        "invitation_time": now,
+        "max_invitation": 0,
+        "vip": 0,
+        "skill_point": 0,
+        "skill_time": now,
+        "formation": {},
+        "avatar_id": 10001001,
+        "avatar_frame_id": 0,
+        "player_type": 0,
+        "max_lev": 999,
+        "max_color": 0,
+        "func_ids": [],
+        "message_pushes": [],
+        "story_id": 0,
+        "story_state": 0,
+        "guide_id": 0,
+        "guild_id": 0,
+        "conquer_lev": 0,
+        "conquer_loop_id": 1,
+        "conquer_region": 0,
+    }
+
+
+def offline_start_detail(now: int) -> dict[str, Any]:
+    """Responses bundled inside RETRIEVE_TOKEN by the original service.
+
+    This client does not request these three MIDs after login: it expects them
+    under ``detail`` in the token response.  In particular a missing player
+    record leaves MainScene with no model and makes the loading screen appear
+    to hang.
+    """
+    return {
+        str(MID_LOAD_PLAYER_INFO): offline_player_info(now),
+        "49": {"heros": [], "sort_type": 0},
+        "81": {"list": [], "spirit_list": [], "sort_type": 0},
+    }
+
+
 def response_for(payload: dict[str, Any], config: Config) -> Any:
     """Return the smallest safe response for the discovered startup calls."""
     mid = payload.get("mid")
@@ -94,6 +150,7 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
     if mid == MID_RETRIEVE_TOKEN:
         return {
             "token": "offline-token",
+            "uid": 1,
             "region": int(payload.get("region") or 1),
             "log_url": "",
             "is_new": "0",
@@ -101,6 +158,7 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
             "is_debug": 0,
             "is_old_top": 0,
             "server_time": now,
+            "detail": offline_start_detail(now),
         }
 
     if mid == MID_LOAD_ANNOUNCE:
@@ -110,18 +168,10 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
         return {"server_time": now}
 
     if mid == MID_LOAD_PLAYER_INFO:
-        # This is only a starting shape.  Device logs will reveal remaining
-        # required fields when the main scene loads.
-        return {
-            "player_id": 1,
-            "playerID": 1,
-            "player_name": "Offline Player",
-            "playerName": "Offline Player",
-            "level": 1,
-            "avatar_id": 10001001,
-            "avatar_frame_id": 1,
-            "server_time": now,
-        }
+        return offline_player_info(now)
+
+    if mid == 2784:  # ALBUM_SPECIAL_COLLECT_INFO
+        return {"is_award": [], "server_time": now}
 
     if mid == MID_GET_BUILDING_LIST:
         # EventCentre.lua reads these fields unconditionally during startup.
