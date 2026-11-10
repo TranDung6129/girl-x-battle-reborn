@@ -15,7 +15,10 @@ from pathlib import Path
 
 
 ENTRY = "assets/src_64/UpdateScene_64.lua"
+LOADING_ENTRY = "assets/src_64/app/scenes/LoadingScene.lua"
 ORIGINAL_URL = b"http://119.81.215.217:9000/center/v1"
+SDK_LOGIN_CALL = b"\x17showLoginSdkWindow"
+OFFLINE_LOGIN_CALL = b"\x15showLoginWindow_"
 
 
 def equal_length_url(url: str, byte_length: int) -> bytes:
@@ -32,23 +35,49 @@ def equal_length_url(url: str, byte_length: int) -> bytes:
     return encoded + separator + (b"x" * padding_length)
 
 
+def bypass_android_sdk_login(chunk: bytes) -> bytes:
+    """Change the startup branch from SDK login to the built-in login window.
+
+    This is a bytecode-level patch for the supplied 1.631.0 APK.  The LuaJIT
+    prototype-size field must shrink by two bytes along with the replacement
+    method name.  We fail closed if this known layout changes.
+    """
+    call_offset = chunk.find(SDK_LOGIN_CALL)
+    if call_offset != 256:
+        raise ValueError(f"unexpected SDK-login call offset: {call_offset}")
+    size_offset = call_offset - 172
+    if chunk[size_offset : size_offset + 2] != b"\xa8\x02":
+        raise ValueError("unexpected LuaJIT prototype size before SDK-login call")
+    return (
+        chunk[:size_offset]
+        + b"\xa6\x02"
+        + chunk[size_offset + 2 : call_offset]
+        + OFFLINE_LOGIN_CALL
+        + chunk[call_offset + len(SDK_LOGIN_CALL) :]
+    )
+
+
 def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
     replacement = equal_length_url(bootstrap_url, len(ORIGINAL_URL))
     with zipfile.ZipFile(apk, "r") as source:
-        content = source.read(ENTRY)
-        count = content.count(ORIGINAL_URL)
+        update_scene = source.read(ENTRY)
+        count = update_scene.count(ORIGINAL_URL)
         if count != 1:
             raise ValueError(f"expected one bootstrap URL in {ENTRY}, found {count}")
-        patched = content.replace(ORIGINAL_URL, replacement)
+        patched_entries = {
+            ENTRY: update_scene.replace(ORIGINAL_URL, replacement),
+            LOADING_ENTRY: bypass_android_sdk_login(source.read(LOADING_ENTRY)),
+        }
 
         with zipfile.ZipFile(output, "w") as target:
             for info in source.infolist():
                 if info.filename.startswith("META-INF/") or info.filename == "stamp-cert-sha256":
                     continue
-                data = patched if info.filename == ENTRY else source.read(info.filename)
+                data = patched_entries.get(info.filename, source.read(info.filename))
                 target.writestr(info, data, compress_type=info.compress_type)
 
     print(f"Patched {ENTRY} -> {bootstrap_url}")
+    print(f"Patched {LOADING_ENTRY} to use built-in offline login")
     print(f"Created unsigned APK without META-INF signatures: {output}")
 
 
