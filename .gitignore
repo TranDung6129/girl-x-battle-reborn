@@ -1,0 +1,18 @@
+# Large game packages and local reverse-engineering output
+*.apk
+*.apks
+*.xapk
+*.zip
+*.jar
+*.dex
+
+# Decompiled and extracted app contents
+apktool-output/
+jadx-output/
+extracted/
+work/
+
+# Local tooling
+.venv/
+__pycache__/
+.DS_Store
