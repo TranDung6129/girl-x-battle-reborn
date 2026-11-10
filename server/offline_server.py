@@ -26,6 +26,7 @@ MID_LOAD_ANNOUNCE = 7
 MID_LOAD_PLAYER_INFO = 17
 MID_LOAD_USER_REGIONS = 18
 MID_QUERY_SERVER_TIME = 3
+MID_GET_BUILDING_LIST = 1056
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,35 @@ def response_for(payload: dict[str, Any], config: Config) -> dict[str, Any]:
             "level": 1,
             "avatar_id": 10001001,
             "avatar_frame_id": 1,
+            "server_time": now,
+        }
+
+    if mid == MID_GET_BUILDING_LIST:
+        # EventCentre.lua reads these fields unconditionally during startup.
+        # A level-one, idle building set is enough to open the main UI without
+        # enabling the online/event systems behind those buildings.
+        idle_building = {"lev": 1, "need_time": 0, "start_time": 0, "new_evolve": 0}
+        return {
+            "building_list": {str(kind): dict(idle_building) for kind in range(1, 8)},
+            "desk_info": {
+                "is_making": 0,
+                "make_need_time": 0,
+                "make_start_time": 0,
+                "make_item": 0,
+            },
+            "pet_cabin_info": {
+                "pet_id": 0,
+                "is_making": 0,
+                "make_need_time": 0,
+                "make_start_time": 0,
+                "make_item": 0,
+            },
+            "cabinet_info": {
+                "need_time": 0,
+                "start_time": 0,
+                "recent_complete_skill": 0,
+                "cur_learn_skill": 0,
+            },
             "server_time": now,
         }
 
