@@ -20,7 +20,8 @@ ORIGINAL_URL = b"http://119.81.215.217:9000/center/v1"
 SDK_LOGIN_CALL = b"\x17showLoginSdkWindow"
 OFFLINE_LOGIN_CALL = b"\x15showLoginWindow_"
 SDK_SELECT_SERVER = b"xydSelectServer"
-OFFLINE_SELECT_SERVER = b"xydOfflineNoOp_"
+ANDROID_PLATFORM = b"android"
+OFFLINE_PLATFORM = b"offroid"
 
 
 def equal_length_url(url: str, byte_length: int) -> bytes:
@@ -57,11 +58,22 @@ def bypass_android_sdk_login(chunk: bytes) -> bytes:
         + OFFLINE_LOGIN_CALL
         + chunk[call_offset + len(SDK_LOGIN_CALL) :]
     )
-    if patched.count(SDK_SELECT_SERVER) != 1:
+    select_offset = patched.find(SDK_SELECT_SERVER)
+    if select_offset < 0 or patched.count(SDK_SELECT_SERVER) != 1:
         raise ValueError("unexpected Android SDK select-server call count")
-    if len(SDK_SELECT_SERVER) != len(OFFLINE_SELECT_SERVER):
-        raise AssertionError("select-server replacement must preserve bytecode size")
-    return patched.replace(SDK_SELECT_SERVER, OFFLINE_SELECT_SERVER)
+    # LoadingScene.selectServer() only calls the obsolete vendor SDK when
+    # device.platform == "android".  Replacing that *specific* bytecode
+    # constant with an equal-length non-platform value makes the function a
+    # genuine no-op.  This is safer than redirecting to a made-up Java method:
+    # LuaJavaBridge may otherwise abort a callback when the method is absent.
+    platform_offset = patched.find(ANDROID_PLATFORM, select_offset, select_offset + 96)
+    if platform_offset < 0:
+        raise ValueError("could not locate Android branch of selectServer")
+    return (
+        patched[:platform_offset]
+        + OFFLINE_PLATFORM
+        + patched[platform_offset + len(ANDROID_PLATFORM) :]
+    )
 
 
 def patch(apk: Path, output: Path, bootstrap_url: str) -> None:

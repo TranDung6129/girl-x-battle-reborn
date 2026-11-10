@@ -27,6 +27,7 @@ MID_LOAD_PLAYER_INFO = 17
 MID_LOAD_USER_REGIONS = 18
 MID_QUERY_SERVER_TIME = 3
 MID_GET_BUILDING_LIST = 1056
+MID_GET_PLAYER_GROUP_BY_KEY = 2864
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ class Store:
             )
 
 
-def response_for(payload: dict[str, Any], config: Config) -> dict[str, Any]:
+def response_for(payload: dict[str, Any], config: Config) -> Any:
     """Return the smallest safe response for the discovered startup calls."""
     mid = payload.get("mid")
     now = int(time.time())
@@ -151,6 +152,12 @@ def response_for(payload: dict[str, Any], config: Config) -> dict[str, Any]:
             "server_time": now,
         }
 
+    if mid == MID_GET_PLAYER_GROUP_BY_KEY:
+        # SelfPlayer stores this response directly as an A/B group string,
+        # rather than as an object.  A deterministic group prevents startup
+        # code from treating an unexpected object as a feature flag.
+        return "A"
+
     # Returning HTTP 200 lets the client log and expose the next missing
     # response shape without the generic connection-retry dialog.
     return {"server_time": now, "offline_unimplemented_mid": mid}
@@ -194,7 +201,7 @@ def make_handler(config: Config, store: Store) -> type[BaseHTTPRequestHandler]:
                 return
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
-        def send_json(self, status: HTTPStatus, body: dict[str, Any]) -> None:
+        def send_json(self, status: HTTPStatus, body: Any) -> None:
             encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
