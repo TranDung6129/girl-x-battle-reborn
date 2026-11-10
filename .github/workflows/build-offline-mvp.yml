@@ -1,0 +1,58 @@
+name: Build offline MVP APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tools
+        uses: actions/checkout@v4
+
+      - name: Download original APK from the base release
+        run: |
+          mkdir -p build android-tools
+          curl --fail --location --retry 3 --output build/original.apk \
+            https://github.com/TranDung6129/girl-x-battle-reborn/releases/download/base-apk/girls-x-battle-1-631-0.apk
+
+      - name: Download Android build tools
+        run: |
+          curl --fail --location --retry 3 --output android-tools/build-tools.zip \
+            https://dl.google.com/android/repository/build-tools_r35.0.1_linux.zip
+          unzip -q android-tools/build-tools.zip -d android-tools
+
+      - name: Patch bootstrap URL
+        run: |
+          python3 tools/patch_bootstrap_url.py build/original.apk build/patched-unsigned.apk
+
+      - name: Align and sign test APK
+        run: |
+          keytool -genkeypair \
+            -keystore build/offline-test.keystore \
+            -storepass gxb-local-debug \
+            -keypass gxb-local-debug \
+            -alias gxb-offline \
+            -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname 'CN=GXB Offline Test, OU=Local Development, O=GXB Reborn, L=Local, ST=Local, C=VN'
+          android-tools/android-15/zipalign -f -p 4 build/patched-unsigned.apk build/aligned.apk
+          android-tools/android-15/apksigner sign \
+            --ks build/offline-test.keystore \
+            --ks-key-alias gxb-offline \
+            --ks-pass pass:gxb-local-debug \
+            --key-pass pass:gxb-local-debug \
+            --out build/girls-x-battle-offline-mvp-0.1.apk \
+            build/aligned.apk
+          android-tools/android-15/apksigner verify --verbose build/girls-x-battle-offline-mvp-0.1.apk
+          sha256sum build/girls-x-battle-offline-mvp-0.1.apk
+
+      - name: Upload signed test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: girls-x-battle-offline-mvp-0.1
+          path: build/girls-x-battle-offline-mvp-0.1.apk
+          if-no-files-found: error
+          retention-days: 7

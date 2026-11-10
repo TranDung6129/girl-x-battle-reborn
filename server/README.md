@@ -24,3 +24,5 @@ python3 tools/patch_bootstrap_url.py original.apk patched-unsigned.apk
 ```
 
 The script only changes the primary bootstrap URL in `UpdateScene_64.lua`; it preserves LuaJIT bytecode length by adding ignored URL-query padding and removes the old `META-INF` signatures. The resulting APK must be zipaligned and signed with a key you control before installation. Use only a local companion server and an APK you are permitted to modify.
+
+For convenience, the `Build offline MVP APK` GitHub Actions workflow performs those steps and uploads a signed test APK as an artifact. It uses a newly generated test key on every run; the APK cannot be installed over the original signed game and must not be used for production distribution.
