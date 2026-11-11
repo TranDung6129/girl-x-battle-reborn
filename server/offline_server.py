@@ -242,10 +242,40 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
             "second_ids": [10001003, 10001004, 10001006],
             "mana_id": 10001001,
             "pet_id": 10001002,
-            "partner_id": 10001003,
+            # sxMachineSetUp tests main_ids[selected] for a dynamic skin,
+            # but passes partner_id to SkinDynamicTable.pos.  10001003 has
+            # no skin_dynamic row and crashes before WindowManager attaches
+            # the window. Keep the featured pair on the same dynamic model.
+            "partner_id": 10001001,
             "directional_show_id": 10001004,
             "server_time": now,
         }
+
+    if mid == 836:  # GET_LIBRARY_INFOS: Library.updateLibraryInfos
+        return {
+            "library_infos": {}, "library_talk_infos": {},
+            "library_cg_infos": [],
+            "library_bg_infos": {"bg_main": 1, "bg_room": 2,
+                                 "has_buy": [], "server_time": now},
+            "server_time": now,
+        }
+
+    if mid == 1344:  # ILLUSION_LOAD_INFO: Illusion.loadIllusionInfos
+        return {"paradise_info": {"paradise_id": 1, "count": 0},
+                "challenge_times": 0, "buy_times": 0, "hurt": 0,
+                "rank": 0, "server_time": now}
+
+    if mid == 176:  # LOAD_FRIENDS: SocialSystem.loadFriends
+        return {"blacklist": [], "friend_list": [], "notice_list": [],
+                "request_list": [], "offline_msg_list": [],
+                "send_gift_count": 0, "receive_gift_count": 0,
+                "server_time": now}
+
+    if mid == 1302:  # LOAD_ACHIEVEMENT_INFO: Achievement.loadAchievementInfo
+        return {"achieve_list": [],
+                "base_info": {"point_level": 1, "total_points": 0,
+                              "rank": 0, "award_status": []},
+                "server_time": now}
 
     # Returning HTTP 200 lets the client log and expose the next missing
     # response shape without the generic connection-retry dialog.

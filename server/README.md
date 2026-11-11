@@ -81,3 +81,26 @@ for 40–60 seconds. Copy the `CLIENT LUA LOG` block from the server console.
 
 Protocol checks: `python3 -m unittest discover -s server -p 'test_*.py'` from the
 repository root.
+
+### Vending traceback fix
+
+The device traceback identifies `SkinDynamicTable.pos` called by
+`SummonWindow.sxMachineSetUp` before the window is attached to its parent.
+The client tests `main_ids[selected]` for a dynamic skin but looks up animation
+coordinates using `partner_id`. The old server paired dynamic `10001001` with
+`partner_id=10001003`, which has no `skin_dynamic` row. The server now uses
+`10001001` for both featured slots. This preserves the original client layout;
+it is not a missing-CSB or missing-Magic-effect fix.
+
+To reproduce the old nil-index exception and verify the corrected lookup using
+the original extracted bytecode:
+
+```sh
+luajit tools/check_summon_contract.lua path/to/assets/src_64 10001001
+```
+
+The server also provides the empty collection/status fields required by the
+library, Illusion, friends, and achievement callbacks in the same device log.
+This does not implement those game systems or establish that the `0%` resource
+loading issue is fixed. The older 0.6 APK still has Magic setup disabled; no new
+APK is needed to test these server corrections.
