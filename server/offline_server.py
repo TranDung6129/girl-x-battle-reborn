@@ -87,6 +87,11 @@ class Store:
                     partner_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     table_id INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS offline_items (
+                    table_id INTEGER PRIMARY KEY,
+                    item_num INTEGER NOT NULL,
+                    time INTEGER NOT NULL
+                );
                 """
             )
 
@@ -132,17 +137,32 @@ class Store:
             raise ValueError(f'unsupported summon type/index: {kind}/{index}')
         result = []
         with self.connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            owned = {row[0] for row in connection.execute('SELECT table_id FROM offline_heroes')}
             for _ in range(counts[kind][index]):
                 table_id = random.choice((10001001, 10001002, 10001003, 10001004, 10001006))
+                if table_id in owned:
+                    # Explicit sandbox reward: one matching soulstone per
+                    # duplicate, not the unknown original conversion rate.
+                    stone_id = table_id + 30000000
+                    connection.execute('INSERT INTO offline_items VALUES(?, 1, ?) ON CONFLICT(table_id) DO UPDATE SET item_num=item_num+1', (stone_id, int(time.time())))
+                    result.append(dict(table_id=stone_id, item_num=1, is_partner=False, to_stone=True))
+                    continue
                 cursor = connection.execute('INSERT INTO offline_heroes(table_id) VALUES(?)', (table_id,))
                 result.append(dict(hero_record(cursor.lastrowid, table_id), is_partner=True, item_num=1))
+                owned.add(table_id)
         return result
+
+    def items(self) -> list[dict[str, int]]:
+        with self.connect() as connection:
+            return [dict(zip(('table_id', 'item_num', 'time'), row)) for row in
+                    connection.execute('SELECT table_id, item_num, time FROM offline_items ORDER BY table_id')]
 
 
 def hero_record(partner_id: int, table_id: int) -> dict[str, Any]:
     """Level-one test hero, using NormalHero.populate_'s field names."""
     return {"partner_id": partner_id, "table_id": table_id, "player_id": 1,
-            "lev": 1, "exp": 0, "star": 1, "color": 1, "skin_ids": [],
+            "lev": 1, "exp": 0, "star": 2 if table_id == 10001006 else 1, "color": 1, "skin_ids": [],
             "skills": [1] * 6, "equips": [0] * 6, "fumos": [0] * 6,
             "element_equips": {}, "element_levels": {}, "element_bak_equips": {},
             "element_bak_levels": {}, "spirit_item": [], "house_equips": []}
@@ -154,28 +174,31 @@ def offline_player_info(now: int) -> dict[str, Any]:
         "player_id": 1,
         "uid": 1,
         "player_name": "Offline Player",
-        "lev": 1,
-        "exp": 1,
+        "lev": 100,
+        # total_exp at level 99: SelfPlayer increments lev if exp reaches
+        # total_exp[100], even when the supplied lev is already 100.
+        "exp": 579615,
         "region": 1,
         "region_name": "Offline",
         "mana": 100000,
         "crystal": 100000,
-        "energy": 100,
-        "max_energy": 100,
+        "energy": 160,
+        "max_energy": 160,
         "energy_time": now,
         "spirit_energy": 0,
         "spirit_energy_time": now,
         "invitation": 0,
         "invitation_time": now,
         "max_invitation": 0,
-        "vip": 0,
-        "skill_point": 0,
+        "vip": 15,
+        "charge": 500000,  # local VIP progress only; no payment integration
+        "skill_point": 80,
         "skill_time": now,
         "formation": {},
         "avatar_id": 10001001,
         "avatar_frame_id": 0,
         "player_type": 0,
-        "max_lev": 999,
+        "max_lev": 100,
         "max_color": 0,
         "func_ids": [],
         "message_pushes": [],
@@ -200,7 +223,33 @@ def offline_start_detail(now: int, store: Store | None = None) -> dict[str, Any]
     return {
         str(MID_LOAD_PLAYER_INFO): dict(offline_player_info(now), **(store.profile() if store else {})),
         "49": {"heros": store.heroes() if store else [], "sort_type": 0},
-        "81": {"list": [], "spirit_list": [], "sort_type": 0},
+        "81": {"list": store.items() if store else [], "spirit_list": [], "sort_type": 0},
+        # MapWindow reads chapter IDs BEFORE issuing LOAD_WORLD_MAP.
+        # Login's handler expects these IDs at the top level, not nested.
+        "112": offline_world_map(now)["chapter_info"],
+    }
+
+
+def offline_world_map(now: int) -> dict[str, Any]:
+    """Uncompleted chapter 1, from the APK's chapter/campaign tables."""
+    normal = (100001, 100002, 100004, 100005, 100007, 100008,
+              100011, 100012, 100015, 100016, 100018)
+
+    def stage(cid: int, limit: int) -> dict[str, int]:
+        return dict(campaign_id=cid, star=0, daily_limit=limit,
+                    reset_count=0, is_partner_drop=0)
+
+    return {
+        "normal": [stage(cid, -1 if i % 2 == 0 else 0) for i, cid in enumerate(normal)],
+        "super": [stage(cid, 3) for cid in range(100019, 100025)],
+        "challenge": [stage(24100 + group * 10 + i, 0)
+                      for group in range(1, 7) for i in range(1, 4)],
+        "chapter_events": [],
+        "chapter_info": {"normal_chapter_id": 1, "normal_campaign_id": 100001,
+                         "super_chapter_id": 1, "super_campaign_id": 100019,
+                         "normal_stars": 0, "super_stars": 0,
+                         "normal_bonus_id": 0, "super_bonus_id": 0},
+        "server_time": now,
     }
 
 
@@ -257,6 +306,12 @@ def response_for(payload: dict[str, Any], config: Config, store: Store | None = 
 
     if mid == 49 and store is not None:
         return {"heros": store.heroes(), "sort_type": 0}
+
+    if mid == 81:
+        return {"list": store.items() if store else [], "spirit_list": [], "sort_type": 0}
+
+    if mid == 112:  # LOAD_WORLD_MAP: SelfPlayer.worldMapEvent_
+        return offline_world_map(now)
 
     if mid == 50 and store is not None:  # SUMMON_HERO
         return {"result": store.summon(payload), "items": [],

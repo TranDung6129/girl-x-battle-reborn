@@ -44,15 +44,15 @@ jobs:
             --ks-key-alias gxb-offline \
             --ks-pass pass:gxb-local-debug \
             --key-pass pass:gxb-local-debug \
-            --out build/girls-x-battle-offline-mvp-0.7.apk \
+            --out build/girls-x-battle-offline-mvp-0.8.apk \
             build/aligned.apk
-          android-tools/android-15/apksigner verify --verbose build/girls-x-battle-offline-mvp-0.7.apk
-          sha256sum build/girls-x-battle-offline-mvp-0.7.apk
+          android-tools/android-15/apksigner verify --verbose build/girls-x-battle-offline-mvp-0.8.apk
+          sha256sum build/girls-x-battle-offline-mvp-0.8.apk
 
       - name: Upload signed test APK
         uses: actions/upload-artifact@v4
         with:
-          name: girls-x-battle-offline-mvp-0.7
-          path: build/girls-x-battle-offline-mvp-0.7.apk
+          name: girls-x-battle-offline-mvp-0.8
+          path: build/girls-x-battle-offline-mvp-0.8.apk
           if-no-files-found: error
           retention-days: 7

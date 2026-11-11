@@ -113,7 +113,7 @@ repository root.
 MID 50 now returns persisted level-one heroes from a small test pool
 (`10001001`, `10001002`, `10001003`, `10001004`, `10001006`). Mana Buy 1/10/100
 and Crystal Buy 1/10 use the counts in the client tables. These test draws are
-free, permit duplicates with distinct instance IDs, and do not reproduce the
+free and do not reproduce the
 original reward rates or economy. Unsupported type/index pairs are rejected.
 Heroes are saved transactionally in `offline-state.sqlite3` and included in
 the next login's MID 49 roster. Each accepted request is a separate draw;
@@ -125,6 +125,37 @@ without allowing stale tutorial uploads to roll this back. This skips the
 initial tutorial; it does not unlock all game modes or implement Campaign.
 Restart the server and force-stop/relaunch the existing APK to receive this
 state. Do not delete the SQLite database if you want to retain drawn heroes.
+
+### Account, duplicate and Campaign repairs (0.8)
+
+The offline account now starts at the APK limits: account level 100 and VIP 15,
+with energy capacity 160. Hero levels remain unchanged. EXP is the level-100
+starting threshold (579615); the next threshold would incorrectly trigger level
+101 in the original client login handler.
+
+Only the first draw of a hero type creates a hero. Later draws return its matching
+soulstone with `to_stone=true`, selecting the conversion screen instead of NEW.
+The sandbox awards **one stone per duplicate**, not the unknown original rate.
+Quantities persist in `offline_items` and restore in MID 81. Existing duplicate
+hero instances are preserved; no database reset is required.
+
+Campaign receives chapter IDs at login and normal/super/challenge arrays on MID
+112, fixing the traced `SelfPlayer.worldMapEvent_` pairs(nil) error. Chapter 1 is
+uncompleted. Battles are not implemented; the full UI still needs device testing.
+
+APK 0.8 changes only LibraryBGTable.getBG's empty fallback to the bundled
+`images/main_scene.png`. MainScene can ask for this path before Library.bgMain
+is initialized by MID 836. All valid background IDs keep their original paths;
+Vending bytecode remains untouched. Validate with original extracted bytecode:
+
+```sh
+python3 tools/check_repair_contracts.py path/to/assets/src_64 /path/to/luajit
+```
+
+Server fixes work with APK 0.7; the background fallback needs 0.8. CI uses a fresh
+signing key, so replacing the APK may require uninstalling it, deleting local
+data and cached downloads. Back up device data first if needed. The Ubuntu
+SQLite roster is unaffected by an Android uninstall.
 
 The result/first-encounter UI and its resources still require Android testing;
 successful server draws alone do not prove those screens render correctly.

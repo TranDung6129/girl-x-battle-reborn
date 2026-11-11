@@ -17,6 +17,7 @@ from pathlib import Path
 ENTRY = "assets/src_64/UpdateScene_64.lua"
 LOADING_ENTRY = "assets/src_64/app/scenes/LoadingScene.lua"
 SUMMON_ENTRY = "assets/src_64/app/windows/SummonWindow.lua"
+BACKGROUND_ENTRY = "assets/src_64/app/common/tables/LibraryBGTable.lua"
 ORIGINAL_URL = b"http://119.81.215.217:9000/center/v1"
 SDK_LOGIN_CALL = b"\x17showLoginSdkWindow"
 OFFLINE_LOGIN_CALL = b"\x15showLoginWindow_"
@@ -104,6 +105,7 @@ def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
         patched_entries = {
             ENTRY: update_scene.replace(ORIGINAL_URL, replacement),
             LOADING_ENTRY: bypass_android_sdk_login(source.read(LOADING_ENTRY)),
+            BACKGROUND_ENTRY: default_main_background(source.read(BACKGROUND_ENTRY)),
         }
 
         with zipfile.ZipFile(output, "w") as target:
@@ -116,7 +118,25 @@ def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
     print(f"Patched {ENTRY} -> {bootstrap_url}")
     print(f"Patched {LOADING_ENTRY} to use built-in offline login")
     print(f"Preserved original {SUMMON_ENTRY}, including panel visibility and localization")
+    print(f"Patched {BACKGROUND_ENTRY}: default background before library response arrives")
     print(f"Created unsigned APK without META-INF signatures: {output}")
+
+
+def default_main_background(chunk: bytes) -> bytes:
+    """Replace only getBG's empty fallback constant, preserving instructions.
+
+    Exact 1.631.0 stripped LuaJIT prototype: length byte, seven header bytes,
+    six instructions, then constants empty string and bg_. Fail closed for
+    another version. Both the prototype and string sizes fit one-byte ULEB.
+    """
+    old = bytes.fromhex('24 00 02 03 00 02 00 06 '
+                        '39 02 00 00 38 02 01 02 0e 00 02 00 '
+                        '58 03 01 80 27 02 01 00 4c 02 02 00 05 08 62 67 5f')
+    if chunk[:5] != b'\x1bLJ\x02\x0a' or chunk.count(old) != 1:
+        raise ValueError('unexpected LibraryBGTable.getBG prototype')
+    path = b'images/main_scene.png'
+    new = bytes([old[0] + len(path)]) + old[1:32] + bytes([5 + len(path)]) + path + old[33:]
+    return chunk.replace(old, new)
 
 
 def main() -> None:
