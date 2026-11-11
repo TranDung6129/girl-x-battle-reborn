@@ -267,7 +267,8 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
 
     if mid == 176:  # LOAD_FRIENDS: SocialSystem.loadFriends
         return {"blacklist": [], "friend_list": [], "notice_list": [],
-                "request_list": [], "offline_msg_list": [],
+                "request_list": [], "offline_msg_list": [], "done_recall": [],
+                "doing_recall": [], "recall_awarded": [],
                 "send_gift_count": 0, "receive_gift_count": 0,
                 "server_time": now}
 

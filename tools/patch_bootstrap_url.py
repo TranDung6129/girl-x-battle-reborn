@@ -104,7 +104,6 @@ def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
         patched_entries = {
             ENTRY: update_scene.replace(ORIGINAL_URL, replacement),
             LOADING_ENTRY: bypass_android_sdk_login(source.read(LOADING_ENTRY)),
-            SUMMON_ENTRY: bypass_missing_magic_summon_effect(source.read(SUMMON_ENTRY)),
         }
 
         with zipfile.ZipFile(output, "w") as target:
@@ -116,7 +115,7 @@ def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
 
     print(f"Patched {ENTRY} -> {bootstrap_url}")
     print(f"Patched {LOADING_ENTRY} to use built-in offline login")
-    print(f"Patched {SUMMON_ENTRY} to skip its missing Magic-Gacha effect")
+    print(f"Preserved original {SUMMON_ENTRY}, including panel visibility and localization")
     print(f"Created unsigned APK without META-INF signatures: {output}")
 
 
