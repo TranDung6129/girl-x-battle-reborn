@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import shutil
 import sqlite3
 import time
 import zlib
@@ -22,6 +23,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+try:
+    from .asset_server import AssetIndex
+except ImportError:
+    from asset_server import AssetIndex
 
 
 MID_VERSION_CHECK = 2
@@ -41,6 +47,7 @@ MAX_LOG_DECOMPRESSED = 8 * 1024 * 1024
 class Config:
     host: str
     port: int
+    assets: Path | None = None
 
     @property
     def api_url(self) -> str:
@@ -207,7 +214,7 @@ def response_for(payload: dict[str, Any], config: Config, store: Store | None = 
             "url": config.api_url,
             "server_id": "offline-1",
             "back_domain": "",
-            "res_download_url": "",
+            "res_download_url": f"http://{config.host}:{config.port}/assets/" if config.assets else "",
         }
 
     if mid == MID_VERSION_CHECK:
@@ -408,6 +415,8 @@ def print_client_errors(entries: list[dict[str, Any]]) -> None:
 
 
 def make_handler(config: Config, store: Store) -> type[BaseHTTPRequestHandler]:
+    assets = AssetIndex(config.assets) if config.assets else None
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "GXBOffline/0.1"
 
@@ -441,6 +450,23 @@ def make_handler(config: Config, store: Store) -> type[BaseHTTPRequestHandler]:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
         def do_GET(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            if path.startswith('/assets/') and assets is not None:
+                asset = assets.find(path[len('/assets/'):])
+                if asset is None:
+                    print(f"ASSET MISSING OR HASH MISMATCH: {path}", flush=True)
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "verified asset not found"})
+                    return
+                with asset.open('rb') as stream:
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header('Content-Type', 'application/octet-stream')
+                    self.send_header('Content-Length', str(asset.stat().st_size))
+                    self.end_headers()
+                    try:
+                        shutil.copyfileobj(stream, self.wfile)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                return
             if urlparse(self.path).path == "/healthz":
                 self.send_json(HTTPStatus.OK, {"status": "ok", "api_url": config.api_url})
                 return
@@ -465,13 +491,16 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
     parser.add_argument("--port", default=18080, type=int, help="TCP port (default: 18080)")
     parser.add_argument("--db", default="offline-state.sqlite3", type=Path, help="SQLite request log path")
+    parser.add_argument("--assets", type=Path, help="extracted archive res/web directory for local lazy downloads")
     args = parser.parse_args()
 
-    config = Config(args.host, args.port)
+    config = Config(args.host, args.port, args.assets)
     store = Store(args.db)
     server = ThreadingHTTPServer((config.host, config.port), make_handler(config, store))
     print(f"GXB offline MVP listening at {config.api_url}")
     print(f"Request log: {args.db.resolve()}")
+    if args.assets:
+        print(f"Local resource downloads: {args.assets.resolve()} -> http://{config.host}:{config.port}/assets/")
     print(f"Client Lua errors: {config.client_log_url} (uploaded about every 30 seconds after login)")
     print("Offline sandbox summons enabled: persistent test heroes; initial forced tutorial skipped")
     try:

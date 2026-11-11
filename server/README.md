@@ -35,6 +35,32 @@ For convenience, the `Build offline MVP APK` GitHub Actions workflow performs th
 
 ## Restoring visual resources
 
+### Recommended: local resource downloads (existing APK)
+
+Extract the already verified archive on the Ubuntu host, then point the server
+at its `res/web` directory:
+
+```sh
+mkdir -p ~/gxb-assets-local
+tar --zstd -xf ~/Downloads/gxb-assets.tar.zst -C ~/gxb-assets-local
+python3 offline_server.py --assets ~/gxb-assets-local/res/web
+```
+
+Keep `adb reverse tcp:18080 tcp:18080` active and force-stop/relaunch the app
+to reload the bootstrap resource URL. AssetDownload requests
+`/assets/<basename>.<md5>`; the server matches both basename and actual content
+MD5. The game's own downloader then writes to its private update directory and
+clears its lazy-download marker after verification. Missing/wrong-version files
+return 404 and print `ASSET MISSING OR HASH MISMATCH` rather than substitute an
+unrelated image. The archive remains incomplete; this only serves files present.
+
+Aquaris illustrates why different screens behaved differently: Vending selects
+its bundled dynamic animation, whereas SummonHeroWindow's temporary hero can
+select the static `images/home_card/10002001.png` through `getTransparentCard`.
+The archive's static image matches APK MD5 `2c677cd80519ccd42975806d73f4fe02`
+(92,493 bytes). Iron Fist's `images/avatars/10001006.png` also matches the
+manifest (MD5 `835e5ca82c609a6a827a145dd1639d5c`, 7,965 bytes).
+
 The base 1.631.0 APK contains both the Lua client and many visual resources,
 including `res/windows/summon/summon.csb`, the `lvmeng` character animation,
 and the `summon_click`/`mofaniudanji` effects. A `0%` indicator is not evidence
