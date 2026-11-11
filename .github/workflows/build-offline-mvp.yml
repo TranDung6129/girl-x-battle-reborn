@@ -27,12 +27,7 @@ jobs:
 
       - name: Patch bootstrap URL
         run: |
-          git clone --depth 1 https://github.com/LuaJIT/LuaJIT.git build/luajit
-          make -C build/luajit -j2
-          LUA_PATH="$PWD/build/luajit/src/?.lua;;" build/luajit/src/luajit -b \
-            tools/offline_summon_window.lua build/SummonWindow-offline.ljbc
-          python3 tools/patch_bootstrap_url.py build/original.apk build/patched-unsigned.apk \
-            --summon-chunk build/SummonWindow-offline.ljbc
+          python3 tools/patch_bootstrap_url.py build/original.apk build/patched-unsigned.apk
 
       - name: Align and sign test APK
         run: |
@@ -49,15 +44,15 @@ jobs:
             --ks-key-alias gxb-offline \
             --ks-pass pass:gxb-local-debug \
             --key-pass pass:gxb-local-debug \
-            --out build/girls-x-battle-offline-mvp-0.5.apk \
+            --out build/girls-x-battle-offline-mvp-0.6.apk \
             build/aligned.apk
-          android-tools/android-15/apksigner verify --verbose build/girls-x-battle-offline-mvp-0.5.apk
-          sha256sum build/girls-x-battle-offline-mvp-0.5.apk
+          android-tools/android-15/apksigner verify --verbose build/girls-x-battle-offline-mvp-0.6.apk
+          sha256sum build/girls-x-battle-offline-mvp-0.6.apk
 
       - name: Upload signed test APK
         uses: actions/upload-artifact@v4
         with:
-          name: girls-x-battle-offline-mvp-0.5
-          path: build/girls-x-battle-offline-mvp-0.5.apk
+          name: girls-x-battle-offline-mvp-0.6
+          path: build/girls-x-battle-offline-mvp-0.6.apk
           if-no-files-found: error
           retention-days: 7

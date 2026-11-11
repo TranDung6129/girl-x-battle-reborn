@@ -23,6 +23,8 @@ OFFLINE_LOGIN_CALL = b"\x15showLoginWindow_"
 SDK_SELECT_SERVER = b"xydSelectServer"
 ANDROID_PLATFORM = b"android"
 OFFLINE_PLATFORM = b"offroid"
+MAGIC_SETUP_CALL = b"\x12\x03\x00\x00\x39\x01\x1e\x00\x42\x01\x02\x01"
+NOOP = b"\x12\x00\x00\x00"
 
 
 def equal_length_url(url: str, byte_length: int) -> bytes:
@@ -77,12 +79,22 @@ def bypass_android_sdk_login(chunk: bytes) -> bytes:
     )
 
 
-def patch(
-    apk: Path,
-    output: Path,
-    bootstrap_url: str,
-    summon_chunk: Path | None = None,
-) -> None:
+def bypass_missing_magic_summon_effect(chunk: bytes) -> bytes:
+    """Skip only the 1.631.0 layout call that loads a missing lazy effect.
+
+    The APK already carries the matching summon.csb.  Replacing the entire
+    window controller makes the default Cocos panels overlap; leaving it intact
+    and suppressing this one three-instruction method invocation retains its
+    normal layout and buttons.  The byte sequence is asserted to be unique so
+    this cannot silently target another APK version.
+    """
+    if chunk.count(MAGIC_SETUP_CALL) != 1:
+        raise ValueError("unexpected Magic-Gacha setup call layout")
+    replacement = MAGIC_SETUP_CALL[:4] + NOOP + NOOP
+    return chunk.replace(MAGIC_SETUP_CALL, replacement)
+
+
+def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
     replacement = equal_length_url(bootstrap_url, len(ORIGINAL_URL))
     with zipfile.ZipFile(apk, "r") as source:
         update_scene = source.read(ENTRY)
@@ -92,12 +104,8 @@ def patch(
         patched_entries = {
             ENTRY: update_scene.replace(ORIGINAL_URL, replacement),
             LOADING_ENTRY: bypass_android_sdk_login(source.read(LOADING_ENTRY)),
+            SUMMON_ENTRY: bypass_missing_magic_summon_effect(source.read(SUMMON_ENTRY)),
         }
-        if summon_chunk is not None:
-            chunk = summon_chunk.read_bytes()
-            if not chunk.startswith(b"\x1bLJ\x02"):
-                raise ValueError(f"summon chunk is not LuaJIT 2 bytecode: {summon_chunk}")
-            patched_entries[SUMMON_ENTRY] = chunk
 
         with zipfile.ZipFile(output, "w") as target:
             for info in source.infolist():
@@ -108,8 +116,7 @@ def patch(
 
     print(f"Patched {ENTRY} -> {bootstrap_url}")
     print(f"Patched {LOADING_ENTRY} to use built-in offline login")
-    if summon_chunk is not None:
-        print(f"Patched {SUMMON_ENTRY} from {summon_chunk}")
+    print(f"Patched {SUMMON_ENTRY} to skip its missing Magic-Gacha effect")
     print(f"Created unsigned APK without META-INF signatures: {output}")
 
 
@@ -122,22 +129,12 @@ def main() -> None:
         default="http://127.0.0.1:18080/center/v1",
         help="local center endpoint; must fit in the original URL constant",
     )
-    parser.add_argument(
-        "--summon-chunk",
-        type=Path,
-        help="optional compatible LuaJIT bytecode to replace SummonWindow.lua",
-    )
     args = parser.parse_args()
     if args.input_apk.resolve() == args.output_apk.resolve():
         raise SystemExit("output_apk must be a new path")
     if not args.input_apk.is_file():
         raise SystemExit(f"input APK not found: {args.input_apk}")
-    patch(
-        args.input_apk,
-        args.output_apk,
-        args.bootstrap_url,
-        args.summon_chunk,
-    )
+    patch(args.input_apk, args.output_apk, args.bootstrap_url)
 
 
 if __name__ == "__main__":
