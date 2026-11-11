@@ -16,6 +16,7 @@ from pathlib import Path
 
 ENTRY = "assets/src_64/UpdateScene_64.lua"
 LOADING_ENTRY = "assets/src_64/app/scenes/LoadingScene.lua"
+SUMMON_ENTRY = "assets/src_64/app/windows/SummonWindow.lua"
 ORIGINAL_URL = b"http://119.81.215.217:9000/center/v1"
 SDK_LOGIN_CALL = b"\x17showLoginSdkWindow"
 OFFLINE_LOGIN_CALL = b"\x15showLoginWindow_"
@@ -76,7 +77,12 @@ def bypass_android_sdk_login(chunk: bytes) -> bytes:
     )
 
 
-def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
+def patch(
+    apk: Path,
+    output: Path,
+    bootstrap_url: str,
+    summon_chunk: Path | None = None,
+) -> None:
     replacement = equal_length_url(bootstrap_url, len(ORIGINAL_URL))
     with zipfile.ZipFile(apk, "r") as source:
         update_scene = source.read(ENTRY)
@@ -87,6 +93,11 @@ def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
             ENTRY: update_scene.replace(ORIGINAL_URL, replacement),
             LOADING_ENTRY: bypass_android_sdk_login(source.read(LOADING_ENTRY)),
         }
+        if summon_chunk is not None:
+            chunk = summon_chunk.read_bytes()
+            if not chunk.startswith(b"\x1bLJ\x02"):
+                raise ValueError(f"summon chunk is not LuaJIT 2 bytecode: {summon_chunk}")
+            patched_entries[SUMMON_ENTRY] = chunk
 
         with zipfile.ZipFile(output, "w") as target:
             for info in source.infolist():
@@ -97,6 +108,8 @@ def patch(apk: Path, output: Path, bootstrap_url: str) -> None:
 
     print(f"Patched {ENTRY} -> {bootstrap_url}")
     print(f"Patched {LOADING_ENTRY} to use built-in offline login")
+    if summon_chunk is not None:
+        print(f"Patched {SUMMON_ENTRY} from {summon_chunk}")
     print(f"Created unsigned APK without META-INF signatures: {output}")
 
 
@@ -109,12 +122,22 @@ def main() -> None:
         default="http://127.0.0.1:18080/center/v1",
         help="local center endpoint; must fit in the original URL constant",
     )
+    parser.add_argument(
+        "--summon-chunk",
+        type=Path,
+        help="optional compatible LuaJIT bytecode to replace SummonWindow.lua",
+    )
     args = parser.parse_args()
     if args.input_apk.resolve() == args.output_apk.resolve():
         raise SystemExit("output_apk must be a new path")
     if not args.input_apk.is_file():
         raise SystemExit(f"input APK not found: {args.input_apk}")
-    patch(args.input_apk, args.output_apk, args.bootstrap_url)
+    patch(
+        args.input_apk,
+        args.output_apk,
+        args.bootstrap_url,
+        args.summon_chunk,
+    )
 
 
 if __name__ == "__main__":
