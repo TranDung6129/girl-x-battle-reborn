@@ -64,5 +64,28 @@ local n = 0
 for _ in pairs(player.worldMaps_) do n = n + 1 end
 assert(n == 35)
 print('PASS: original pairs(nil) reproduced; login/map responses accepted by original SelfPlayer bytecode')
+player.funcIDs = {lua(offline_start_detail(0)['17']['func_ids'])}
+player:genOpenFuncMap()
+assert(player:isFuncOpen(96))
+assert(not player:isFuncOpen(5))
+local functions = dofile(root .. '/data/tables/function.lua')
+local expected = {{}}
+for _, row in pairs(functions.rows) do
+    local data = {{}}
+    for i,k in ipairs(functions.keys) do data[k] = row[i] end
+    local kind, level = data.level:match('^(%d+)|(%d+)$')
+    if kind == '1' and tonumber(level) <= 100 and tonumber(data.open_control) == 1 then
+        expected[tonumber(data.id)] = true
+        assert(player:isFuncOpen(tonumber(data.id)))
+    end
+end
+for _, id in ipairs(player.funcIDs) do assert(expected[id]) end
+local summons = dofile(root .. '/data/tables/summon.lua')
+for _, row in pairs(summons.rows) do
+    local data = {{}}
+    for i,k in ipairs(summons.keys) do data[k] = row[i] end
+    if tonumber(data.id) == 4 then assert(tonumber(data.summon_num) == 6) end
+end
+print('PASS: original feature-gate handler unlocks Gachapon; function flags and SX count match APK tables')
 '''
     subprocess.run([executable, '-'], input=code, text=True, check=True)

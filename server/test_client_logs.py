@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 import zlib
+from urllib.parse import urlencode
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 
@@ -60,6 +61,15 @@ class ClientLogsTest(unittest.TestCase):
     def test_token_enables_existing_error_uploader(self):
         config = Config('127.0.0.1', 18080)
         self.assertEqual(response_for({'mid': 1}, config)['log_url'], 'http://127.0.0.1:18080/client-log')
+
+    def test_unimplemented_chat_is_not_a_success_with_nil_host(self):
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port)
+        connection.request('POST', '/api/v1', urlencode({'payload': json.dumps({'mid': 192})}),
+                           {'Content-Type': 'application/x-www-form-urlencoded'})
+        response = connection.getresponse()
+        self.assertEqual(response.status, 503)
+        self.assertEqual(json.loads(response.read()), {'offline_unavailable': 'chat'})
+        connection.close()
 
 
 if __name__ == '__main__':

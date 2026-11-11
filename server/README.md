@@ -128,6 +128,15 @@ state. Do not delete the SQLite database if you want to retain drawn heroes.
 
 ### Account, duplicate and Campaign repairs (0.8)
 
+The subsequent server-only contract repair batch works with APK 0.8. It fills
+level-based `func_ids`, completes the separate feature guides, supplies empty
+activities, fixes SX's six-result count, and implements a free owned-hero Magic
+Gachapon sandbox (MIDs 70/71). The roster now exposes one instance per hero type,
+keeping all legacy duplicate rows in SQLite. No database reset or reinstall is
+required. Chat returns 503 instead of pretending to supply a TCP endpoint;
+background retries are expected. See `docs/contract-audit.md` for precise coverage
+and remaining limitations.
+
 The offline account now starts at the APK limits: account level 100 and VIP 15,
 with energy capacity 160. Hero levels remain unchanged. EXP is the level-100
 starting threshold (579615); the next threshold would incorrectly trigger level

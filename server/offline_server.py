@@ -41,6 +41,13 @@ MID_GET_PLAYER_GROUP_BY_KEY = 2864
 MID_LOAD_SUMMON_INFO = 56
 MAX_LOG_BODY = 2 * 1024 * 1024
 MAX_LOG_DECOMPRESSED = 8 * 1024 * 1024
+# function.lua: level="1|N", N<=100, open_control=1. Campaign/hero-count
+# gates are deliberately not advertised as cleared by account level alone.
+LEVEL_100_FUNCTIONS = [1,2,3,4,6,7,8,9,10,11,14,15,18,21,22,23,24,25,26,
+    27,28,31,32,33,34,38,40,42,43,46,47,48,51,52,53,54,55,56,57,58,59,60,
+    61,62,63,64,65,66,67,68,70,75,76,77,78,79,80,81,82,83,84,88,89,90,91,
+    92,95,96,97,98,99]
+COMPLETED_FUNCTION_GUIDES = {str(i): 1 for i in range(1, 21)}
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,9 @@ class Store:
                     item_num INTEGER NOT NULL,
                     time INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS offline_settings (
+                    key TEXT PRIMARY KEY, value INTEGER NOT NULL
+                );
                 """
             )
 
@@ -124,14 +134,33 @@ class Store:
 
     def heroes(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            return [hero_record(*row) for row in connection.execute('SELECT partner_id, table_id FROM offline_heroes ORDER BY partner_id')]
+            # Preserve old instance rows for recovery, but expose one canonical
+            # hero per type to the client. No deleting or reassignment of IDs.
+            return [hero_record(*row) for row in connection.execute('SELECT MIN(partner_id), table_id FROM offline_heroes GROUP BY table_id ORDER BY MIN(partner_id)')]
+
+    def magic_target(self) -> int:
+        owned = {h['table_id'] for h in self.heroes()}
+        with self.connect() as connection:
+            row = connection.execute("SELECT value FROM offline_settings WHERE key='magic_target'").fetchone()
+        return row[0] if row and row[0] in owned else min(owned, default=0)
+
+    def magic_summon(self, payload: dict[str, Any], buy: bool) -> list[dict[str, Any]]:
+        target = int(payload.get('partner_id', 0))
+        count = int(payload.get('summon_time', 1))
+        if target not in {h['table_id'] for h in self.heroes()} or count not in (1, 10):
+            raise ValueError('Magic summon requires an owned hero and count 1 or 10')
+        with self.connect() as connection:
+            connection.execute("INSERT INTO offline_settings VALUES('magic_target', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (target,))
+            if buy:
+                connection.execute('INSERT INTO offline_items VALUES(?, ?, ?) ON CONFLICT(table_id) DO UPDATE SET item_num=item_num+excluded.item_num', (target + 30000000, count, int(time.time())))
+        return [dict(table_id=target + 30000000, item_num=1, is_partner=False) for _ in range(count)] if buy else []
 
     def summon(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         kind, index = int(payload.get('summon_type', 0)), int(payload.get('summon_index', 0))
         # Values come from enums.lua and summon.lua. This is a free offline
         # test pool, not a reconstruction of the original reward probabilities.
         counts = {1: {1: 1, 2: 1, 3: 10, 4: 100}, 2: {1: 1, 2: 10},
-                  3: {1: 1}, 4: {1: 1, 2: 1}, 6: {1: 1},
+                  3: {1: 1}, 4: {1: 6, 2: 6}, 6: {1: 1},
                   7: {1: 10}, 10: {1: 1}, 11: {1: 10}}
         if kind not in counts or index not in counts[kind]:
             raise ValueError(f'unsupported summon type/index: {kind}/{index}')
@@ -200,7 +229,9 @@ def offline_player_info(now: int) -> dict[str, Any]:
         "player_type": 0,
         "max_lev": 100,
         "max_color": 0,
-        "func_ids": [],
+        "func_ids": list(LEVEL_100_FUNCTIONS),
+        "guide_function_ids": dict(COMPLETED_FUNCTION_GUIDES),
+        "guide_return_id": 0,
         "message_pushes": [],
         "story_id": 0,
         "story_state": 0,
@@ -227,6 +258,7 @@ def offline_start_detail(now: int, store: Store | None = None) -> dict[str, Any]
         # MapWindow reads chapter IDs BEFORE issuing LOAD_WORLD_MAP.
         # Login's handler expects these IDs at the top level, not nested.
         "112": offline_world_map(now)["chapter_info"],
+        "229": {"list": []},
     }
 
 
@@ -272,7 +304,9 @@ def response_for(payload: dict[str, Any], config: Config, store: Store | None = 
 
     if mid == MID_LOAD_USER_REGIONS:
         return {
-            "regions": [{"region_id": 1, "name": "Offline"}],
+            # Original LoginWindow sorts descending then selects region[4]
+            # (region[2] in debug). All four local aliases use the same DB.
+            "regions": [{"region_id": i, "name": "Offline"} for i in range(1, 5)],
             "players": [],
             "server_time": now,
         }
@@ -304,6 +338,19 @@ def response_for(payload: dict[str, Any], config: Config, store: Store | None = 
         store.save_story(payload)
         return store.profile()
 
+    if mid == 2865:  # SET_PLAYER_GUIDE_FUNCTION
+        return {"guide_function_ids": dict(COMPLETED_FUNCTION_GUIDES), "guide_return_id": 0}
+
+    if mid == 229:  # ACTIVITIES -> Activities.onLoadActivities_
+        return {"list": [], "server_time": now}
+
+    if mid == 1537:  # GET_BOARD_INFO
+        return {"contents": [], "server_time": now}
+
+    if mid in (70, 71) and store is not None:
+        result = store.magic_summon(payload, buy=mid == 70)
+        return {"result": result, "stick_items": [], "server_time": now}
+
     if mid == 49 and store is not None:
         return {"heros": store.heroes(), "sort_type": 0}
 
@@ -315,7 +362,7 @@ def response_for(payload: dict[str, Any], config: Config, store: Store | None = 
 
     if mid == 50 and store is not None:  # SUMMON_HERO
         return {"result": store.summon(payload), "items": [],
-                "summon_info": response_for({"mid": 56}, config), "server_time": now}
+                "summon_info": response_for({"mid": 56}, config, store), "server_time": now}
 
     if mid == 2784:  # ALBUM_SPECIAL_COLLECT_INFO
         return {"is_award": [], "server_time": now}
@@ -372,7 +419,7 @@ def response_for(payload: dict[str, Any], config: Config, store: Store | None = 
             # no skin_dynamic row and crashes before WindowManager attaches
             # the window. Keep the featured pair on the same dynamic model.
             "partner_id": 10001001,
-            "directional_show_id": 10001004,
+            "directional_show_id": store.magic_target() if store else 0,
             "server_time": now,
         }
 
@@ -499,7 +546,17 @@ def make_handler(config: Config, store: Store) -> type[BaseHTTPRequestHandler]:
                 payload = decode_form_payload(body)
                 store.log_request(path, payload)
                 print(f"request path={path} mid={payload.get('mid')} keys={','.join(sorted(payload))}")
+                if payload.get('mid') in (50, 70, 71):
+                    print('summon parameters:', {k: payload[k] for k in
+                          ('summon_type', 'summon_index', 'summon_time', 'partner_id') if k in payload})
                 answer = response_for(payload, config, store)
+                if payload.get('mid') == 192:
+                    # Chat is a separate TCP service, not this HTTP API.
+                    # Non-200 makes Backend take its existing failure callback
+                    # instead of passing nil host/port to the native socket.
+                    # The original client may retry this background request.
+                    self.send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"offline_unavailable": "chat"})
+                    return
                 self.send_json(HTTPStatus.OK, answer)
             except (ValueError, UnicodeEncodeError) as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
