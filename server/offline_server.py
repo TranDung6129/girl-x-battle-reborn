@@ -12,7 +12,10 @@ import argparse
 import json
 import sqlite3
 import time
+import zlib
 from dataclasses import dataclass
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,6 +32,8 @@ MID_QUERY_SERVER_TIME = 3
 MID_GET_BUILDING_LIST = 1056
 MID_GET_PLAYER_GROUP_BY_KEY = 2864
 MID_LOAD_SUMMON_INFO = 56
+MAX_LOG_BODY = 2 * 1024 * 1024
+MAX_LOG_DECOMPRESSED = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,10 @@ class Config:
     @property
     def api_url(self) -> str:
         return f"http://{self.host}:{self.port}/api/v1"
+
+    @property
+    def client_log_url(self) -> str:
+        return f"http://{self.host}:{self.port}/client-log"
 
 
 class Store:
@@ -54,6 +63,11 @@ class Store:
                     mid INTEGER,
                     payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS client_error_log (
+                    id INTEGER PRIMARY KEY,
+                    received_at INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
                 """
             )
 
@@ -65,6 +79,13 @@ class Store:
             connection.execute(
                 "INSERT INTO request_log(received_at, path, mid, payload_json) VALUES (?, ?, ?, ?)",
                 (int(time.time()), path, payload.get("mid"), json.dumps(payload, ensure_ascii=False)),
+            )
+
+    def log_client_errors(self, entries: list[dict[str, Any]]) -> None:
+        with self.connect() as connection:
+            connection.executemany(
+                "INSERT INTO client_error_log(received_at, payload_json) VALUES (?, ?)",
+                [(int(time.time()), json.dumps(entry, ensure_ascii=False)) for entry in entries],
             )
 
 
@@ -153,7 +174,7 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
             "token": "offline-token",
             "uid": 1,
             "region": int(payload.get("region") or 1),
-            "log_url": "",
+            "log_url": config.client_log_url,
             "is_new": "0",
             "story_type": 0,
             "is_debug": 0,
@@ -245,22 +266,84 @@ def decode_form_payload(body: bytes) -> dict[str, Any]:
     return payload
 
 
+def decode_client_errors(body: bytes, content_type: str) -> list[dict[str, Any]]:
+    """Decode Backend.log's multipart ``payload`` containing zlib JSON.
+
+    Native .dmp uploads use a different multipart shape.  Do not acknowledge
+    those: the client treats HTTP 200 as permission to delete its local log.
+    """
+    if len(body) > MAX_LOG_BODY:
+        raise ValueError("client log upload exceeds the size limit")
+    message = BytesParser(policy=email_policy).parsebytes(
+        b"Content-Type: " + content_type.encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
+    )
+    if message.get_content_type() != "multipart/form-data" or not message.is_multipart() or message.defects:
+        raise ValueError("expected a multipart/form-data client log upload")
+    parts = list(message.iter_parts())
+    if len(parts) != 1 or parts[0].get_param("name", header="content-disposition") != "payload":
+        raise ValueError("expected one compressed payload field; native dumps are not supported")
+    compressed = parts[0].get_payload(decode=True)
+    if not isinstance(compressed, bytes):
+        raise ValueError("client log payload is missing")
+    try:
+        inflater = zlib.decompressobj()
+        decoded = inflater.decompress(compressed, MAX_LOG_DECOMPRESSED + 1)
+        if len(decoded) > MAX_LOG_DECOMPRESSED or inflater.unconsumed_tail:
+            raise ValueError("decompressed client log exceeds the size limit")
+        if not inflater.eof or inflater.unused_data:
+            raise ValueError("incomplete or trailing compressed client log data")
+        entries = json.loads(decoded.decode("utf-8"))
+    except (zlib.error, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise ValueError(f"invalid compressed client log: {error}") from error
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) and isinstance(entry.get("log"), str) for entry in entries):
+        raise ValueError("client log must contain a list of objects with log text")
+    return entries
+
+
+def print_client_errors(entries: list[dict[str, Any]]) -> None:
+    print(f"CLIENT LUA LOG: received {len(entries)} record(s); saved in client_error_log", flush=True)
+    remaining = 32000
+    for entry in entries[:20]:
+        trace = entry["log"][: min(6000, remaining)]
+        # Do not replay control characters from client text into the terminal.
+        trace = "".join(char for char in trace if char in "\n\t" or char.isprintable())
+        print(trace, flush=True)
+        remaining -= len(trace)
+        if remaining <= 0:
+            break
+
+
 def make_handler(config: Config, store: Store) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "GXBOffline/0.1"
 
         def do_POST(self) -> None:  # noqa: N802
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length)
             path = urlparse(self.path).path
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid Content-Length"})
+                self.close_connection = True
+                return
+            if length < 0 or length > MAX_LOG_BODY:
+                self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request body exceeds size limit"})
+                self.close_connection = True
+                return
+            body = self.rfile.read(length)
 
             try:
+                if path == "/client-log":
+                    entries = decode_client_errors(body, self.headers.get("Content-Type", ""))
+                    store.log_client_errors(entries)
+                    print_client_errors(entries)
+                    self.send_json(HTTPStatus.OK, {"received": len(entries)})
+                    return
                 payload = decode_form_payload(body)
                 store.log_request(path, payload)
                 print(f"request path={path} mid={payload.get('mid')} keys={','.join(sorted(payload))}")
                 answer = response_for(payload, config)
                 self.send_json(HTTPStatus.OK, answer)
-            except ValueError as error:
+            except (ValueError, UnicodeEncodeError) as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
 
         def do_GET(self) -> None:  # noqa: N802
@@ -295,6 +378,7 @@ def main() -> None:
     server = ThreadingHTTPServer((config.host, config.port), make_handler(config, store))
     print(f"GXB offline MVP listening at {config.api_url}")
     print(f"Request log: {args.db.resolve()}")
+    print(f"Client Lua errors: {config.client_log_url} (uploaded about every 30 seconds after login)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

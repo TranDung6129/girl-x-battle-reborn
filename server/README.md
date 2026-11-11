@@ -35,10 +35,23 @@ For convenience, the `Build offline MVP APK` GitHub Actions workflow performs th
 
 ## Restoring visual resources
 
-The base 1.631.0 APK contains the Lua client but not the game's downloadable
-images, Cocos UI files, skeletons, and sounds. The client looks for those files
-under its Android writable directory, specifically
-`Android/data/com.carolgames.gxb/files/res/web`.
+The base 1.631.0 APK contains both the Lua client and many visual resources,
+including `res/windows/summon/summon.csb`, the `lvmeng` character animation,
+and the `summon_click`/`mofaniudanji` effects. A `0%` indicator is not evidence
+that these files are absent. Other resources are downloaded lazily.
+
+The current installer copies the preserved archive to external
+`Android/data/com.carolgames.gxb/files/res/web`. **That copy alone has not been
+verified to satisfy the client's cache.** The client constructs its update
+root from `getSupportPath() + packageName + '/'` and tracks downloads in
+`lazyFile.json`; copying files does not update that catalogue. The installer's
+success message confirms the copy, not in-game loading.
+
+The APK's Java `Cocos2dxHelper.init` assigns `sFileDirectory` from
+`Activity.getFilesDir().getAbsolutePath()`, and `getCocos2dxWritablePath()`
+returns that field. This points to the app's internal files directory, not
+the external `/sdcard/Android/data/.../files` directory used by the installer.
+Do not assume ADB can write that internal directory on an unrooted device.
 
 A community-preserved archive matching 1.631.0 is available from the
 [Girls X Battle Asset Archive](https://archive.org/details/girls-x-battle-asset-unified-merge).
@@ -52,3 +65,19 @@ tools/install_archived_assets_adb.sh ~/Downloads/gxb1_lazy_unified_assets_verifi
 
 The installer verifies SHA-256 before extracting or copying anything and only
 writes the app's own `files/res` directory. It does not replace the APK.
+
+## Capturing the actual Lua error (no APK reinstall)
+
+The token response now supplies a local `log_url`. The client's existing error
+uploader sends compressed Lua tracebacks approximately every 30 seconds after
+login. The server decodes the multipart/zlib request, saves it in SQLite's
+`client_error_log` table, and prints `CLIENT LUA LOG` followed by the traceback.
+It only acknowledges an upload after saving it, because the client deletes its
+local copy on HTTP 200. Native crash dumps are not accepted by this endpoint.
+
+Restart the updated server and force-stop/relaunch the app so it fetches a new
+token. Reproduce the white Vending screen and leave the app in the foreground
+for 40–60 seconds. Copy the `CLIENT LUA LOG` block from the server console.
+
+Protocol checks: `python3 -m unittest discover -s server -p 'test_*.py'` from the
+repository root.
