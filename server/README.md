@@ -82,6 +82,27 @@ for 40–60 seconds. Copy the `CLIENT LUA LOG` block from the server console.
 Protocol checks: `python3 -m unittest discover -s server -p 'test_*.py'` from the
 repository root.
 
+## Offline summon sandbox
+
+MID 50 now returns persisted level-one heroes from a small test pool
+(`10001001`, `10001002`, `10001003`, `10001004`, `10001006`). Mana Buy 1/10/100
+and Crystal Buy 1/10 use the counts in the client tables. These test draws are
+free, permit duplicates with distinct instance IDs, and do not reproduce the
+original reward rates or economy. Unsupported type/index pairs are rejected.
+Heroes are saved transactionally in `offline-state.sqlite3` and included in
+the next login's MID 49 roster. Each accepted request is a separate draw;
+the original request has no idempotency key, so resending it grants again.
+
+For free exploration the initial forced tutorial is marked complete using the
+client's actual `GuideStoryType.GUIDE_END = 100197`. MID 26 saves story state
+without allowing stale tutorial uploads to roll this back. This skips the
+initial tutorial; it does not unlock all game modes or implement Campaign.
+Restart the server and force-stop/relaunch the existing APK to receive this
+state. Do not delete the SQLite database if you want to retain drawn heroes.
+
+The result/first-encounter UI and its resources still require Android testing;
+successful server draws alone do not prove those screens render correctly.
+
 ### Vending traceback fix
 
 The device traceback identifies `SkinDynamicTable.pos` called by

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sqlite3
 import time
 import zlib
@@ -68,6 +69,17 @@ class Store:
                     received_at INTEGER NOT NULL,
                     payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS offline_profile (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    story_id INTEGER NOT NULL DEFAULT 0,
+                    story_state INTEGER NOT NULL DEFAULT 0,
+                    guide_id INTEGER NOT NULL DEFAULT 100197
+                );
+                INSERT OR IGNORE INTO offline_profile(id) VALUES(1);
+                CREATE TABLE IF NOT EXISTS offline_heroes (
+                    partner_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    table_id INTEGER NOT NULL
+                );
                 """
             )
 
@@ -87,6 +99,46 @@ class Store:
                 "INSERT INTO client_error_log(received_at, payload_json) VALUES (?, ?)",
                 [(int(time.time()), json.dumps(entry, ensure_ascii=False)) for entry in entries],
             )
+
+    def profile(self) -> dict[str, int]:
+        with self.connect() as connection:
+            row = connection.execute('SELECT story_id, story_state, guide_id FROM offline_profile WHERE id=1').fetchone()
+        return dict(zip(('story_id', 'story_state', 'guide_id'), row))
+
+    def save_story(self, payload: dict[str, Any]) -> None:
+        story, state, guide = (int(payload.get(key, 0)) for key in ('story_id', 'story_state', 'guide_id'))
+        with self.connect() as connection:
+            connection.execute('UPDATE offline_profile SET story_id=MAX(story_id, ?), story_state=?, guide_id=MAX(guide_id, ?) WHERE id=1', (story, state, guide))
+
+    def heroes(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            return [hero_record(*row) for row in connection.execute('SELECT partner_id, table_id FROM offline_heroes ORDER BY partner_id')]
+
+    def summon(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        kind, index = int(payload.get('summon_type', 0)), int(payload.get('summon_index', 0))
+        # Values come from enums.lua and summon.lua. This is a free offline
+        # test pool, not a reconstruction of the original reward probabilities.
+        counts = {1: {1: 1, 2: 1, 3: 10, 4: 100}, 2: {1: 1, 2: 10},
+                  3: {1: 1}, 4: {1: 1, 2: 1}, 6: {1: 1},
+                  7: {1: 10}, 10: {1: 1}, 11: {1: 10}}
+        if kind not in counts or index not in counts[kind]:
+            raise ValueError(f'unsupported summon type/index: {kind}/{index}')
+        result = []
+        with self.connect() as connection:
+            for _ in range(counts[kind][index]):
+                table_id = random.choice((10001001, 10001002, 10001003, 10001004, 10001006))
+                cursor = connection.execute('INSERT INTO offline_heroes(table_id) VALUES(?)', (table_id,))
+                result.append(dict(hero_record(cursor.lastrowid, table_id), is_partner=True, item_num=1))
+        return result
+
+
+def hero_record(partner_id: int, table_id: int) -> dict[str, Any]:
+    """Level-one test hero, using NormalHero.populate_'s field names."""
+    return {"partner_id": partner_id, "table_id": table_id, "player_id": 1,
+            "lev": 1, "exp": 0, "star": 1, "color": 1, "skin_ids": [],
+            "skills": [1] * 6, "equips": [0] * 6, "fumos": [0] * 6,
+            "element_equips": {}, "element_levels": {}, "element_bak_equips": {},
+            "element_bak_levels": {}, "spirit_item": [], "house_equips": []}
 
 
 def offline_player_info(now: int) -> dict[str, Any]:
@@ -122,7 +174,7 @@ def offline_player_info(now: int) -> dict[str, Any]:
         "message_pushes": [],
         "story_id": 0,
         "story_state": 0,
-        "guide_id": 0,
+        "guide_id": 100197,  # GuideStoryType.GUIDE_END: offline free exploration
         "guild_id": 0,
         "conquer_lev": 0,
         "conquer_loop_id": 1,
@@ -130,7 +182,7 @@ def offline_player_info(now: int) -> dict[str, Any]:
     }
 
 
-def offline_start_detail(now: int) -> dict[str, Any]:
+def offline_start_detail(now: int, store: Store | None = None) -> dict[str, Any]:
     """Responses bundled inside RETRIEVE_TOKEN by the original service.
 
     This client does not request these three MIDs after login: it expects them
@@ -139,13 +191,13 @@ def offline_start_detail(now: int) -> dict[str, Any]:
     to hang.
     """
     return {
-        str(MID_LOAD_PLAYER_INFO): offline_player_info(now),
-        "49": {"heros": [], "sort_type": 0},
+        str(MID_LOAD_PLAYER_INFO): dict(offline_player_info(now), **(store.profile() if store else {})),
+        "49": {"heros": store.heroes() if store else [], "sort_type": 0},
         "81": {"list": [], "spirit_list": [], "sort_type": 0},
     }
 
 
-def response_for(payload: dict[str, Any], config: Config) -> Any:
+def response_for(payload: dict[str, Any], config: Config, store: Store | None = None) -> Any:
     """Return the smallest safe response for the discovered startup calls."""
     mid = payload.get("mid")
     now = int(time.time())
@@ -180,7 +232,7 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
             "is_debug": 0,
             "is_old_top": 0,
             "server_time": now,
-            "detail": offline_start_detail(now),
+            "detail": offline_start_detail(now, store),
         }
 
     if mid == MID_LOAD_ANNOUNCE:
@@ -190,7 +242,18 @@ def response_for(payload: dict[str, Any], config: Config) -> Any:
         return {"server_time": now}
 
     if mid == MID_LOAD_PLAYER_INFO:
-        return offline_player_info(now)
+        return dict(offline_player_info(now), **(store.profile() if store else {}))
+
+    if mid == 26 and store is not None:  # SAVE_STORY
+        store.save_story(payload)
+        return store.profile()
+
+    if mid == 49 and store is not None:
+        return {"heros": store.heroes(), "sort_type": 0}
+
+    if mid == 50 and store is not None:  # SUMMON_HERO
+        return {"result": store.summon(payload), "items": [],
+                "summon_info": response_for({"mid": 56}, config), "server_time": now}
 
     if mid == 2784:  # ALBUM_SPECIAL_COLLECT_INFO
         return {"is_award": [], "server_time": now}
@@ -372,7 +435,7 @@ def make_handler(config: Config, store: Store) -> type[BaseHTTPRequestHandler]:
                 payload = decode_form_payload(body)
                 store.log_request(path, payload)
                 print(f"request path={path} mid={payload.get('mid')} keys={','.join(sorted(payload))}")
-                answer = response_for(payload, config)
+                answer = response_for(payload, config, store)
                 self.send_json(HTTPStatus.OK, answer)
             except (ValueError, UnicodeEncodeError) as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
@@ -410,6 +473,7 @@ def main() -> None:
     print(f"GXB offline MVP listening at {config.api_url}")
     print(f"Request log: {args.db.resolve()}")
     print(f"Client Lua errors: {config.client_log_url} (uploaded about every 30 seconds after login)")
+    print("Offline sandbox summons enabled: persistent test heroes; initial forced tutorial skipped")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
